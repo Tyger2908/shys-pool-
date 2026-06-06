@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pool Table Heart</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Georgia', serif;
+    }
+    canvas {
+      border-radius: 14px;
+      display: block;
+      max-width: 100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    }
+    #msg {
+      margin-top: 16px;
+      font-size: 15px;
+      color: #c8a44a;
+      letter-spacing: 0.05em;
+      min-height: 22px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="680" height="420"></canvas>
+  <div id="msg">Hover the cue and click to shoot!</div>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const msg = document.getElementById('msg');
+    const W = 680, H = 420;
+    const RAIL_W = 28;
+    const R = 11;
+
+    // Generate evenly-spaced points along the heart outline
+    function getHeartOutlinePoints(cx, cy, scale, count) {
+      const samples = 2000;
+      const pts = [];
+      for (let i = 0; i <= samples; i++) {
+        const t = (i / samples) * Math.PI * 2;
+        const x = cx + scale * 16 * Math.pow(Math.sin(t), 3) / 16;
+        const y = cy - scale * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) / 16;
+        pts.push({ x, y, t });
+      }
+      const arcLen = [0];
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i-1].x;
+        const dy = pts[i].y - pts[i-1].y;
+        arcLen.push(arcLen[i-1] + Math.sqrt(dx*dx + dy*dy));
+      }
+      const total = arcLen[arcLen.length - 1];
+      const spacing = total / count;
+      const result = [];
+      let idx = 0;
+      for (let n = 0; n < count; n++) {
+        const target = n * spacing;
+        while (idx < arcLen.length - 1 && arcLen[idx] < target) idx++;
+        result.push({ x: pts[idx].x, y: pts[idx].y });
+      }
+      return result;
+    }
+
+    const heartCX = 510, heartCY = 195, heartScale = 52;
+    const BALL_COUNT = 28;
+    const allPts = getHeartOutlinePoints(heartCX, heartCY, heartScale, BALL_COUNT);
+
+    const MISSING_IDX = 7;
+    const missingPos = allPts[MISSING_IDX];
+
+    const heartBalls = allPts.map((p, i) => ({
+      x: p.x, y: p.y,
+      color: i % 2 === 0 ? '#cc2244' : '#ff6688',
+      missing: i === MISSING_IDX
+    })).filter(b => !b.missing);
+
+    // S-shaped ball arrangement
+    const sCenters = [];
+    (function() {
+      const grid = [
+        [0,1,1,0],
+        [1,0,0,1],
+        [1,0,0,0],
+        [0,1,1,0],
+        [0,0,0,1],
+        [1,0,0,1],
+        [0,1,1,0],
+      ];
+      const ox = 155, oy = 68, step = R * 2.4;
+      grid.forEach((row, ri) => row.forEach((v, ci) => {
+        if (v) sCenters.push({ x: ox + ci*step, y: oy + ri*step, color: ci%2===0 ? '#e8c84a' : '#e05a2a' });
+      }));
+    })();
+
+    const cueBall = { x: 95, y: 210 };
+    const cueLen = 115;
+    let cueHovered = false, shot = false, completed = false;
+    let shootBall = null;
+
+    function drawTable() {
+      ctx.fillStyle = '#5c3317';
+      ctx.beginPath(); ctx.roundRect(0, 0, W, H, 16); ctx.fill();
+      ctx.fillStyle = '#1a6b35';
+      ctx.fillRect(RAIL_W, RAIL_W, W - RAIL_W*2, H - RAIL_W*2);
+      [[RAIL_W,RAIL_W],[W/2,RAIL_W],[W-RAIL_W,RAIL_W],[RAIL_W,H-RAIL_W],[W/2,H-RAIL_W],[W-RAIL_W,H-RAIL_W]].forEach(([px,py]) => {
+        ctx.beginPath(); ctx.arc(px, py, 13, 0, Math.PI*2); ctx.fillStyle = '#111'; ctx.fill();
+      });
+    }
+
+    function drawBall(x, y, color) {
+      ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI*2);
+      ctx.fillStyle = color; ctx.fill();
+      ctx.beginPath(); ctx.arc(x - R*0.28, y - R*0.28, R*0.28, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(255,255,255,0.42)'; ctx.fill();
+    }
+
+    function drawMissingSlot() {
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = 'rgba(255,180,190,0.7)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(missingPos.x, missingPos.y, R + 2, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawCue(offset) {
+      const tipX = cueBall.x - R - 3 - offset;
+      const endX = tipX - cueLen;
+      const grad = ctx.createLinearGradient(endX, 0, tipX, 0);
+      grad.addColorStop(0, '#2a0e02');
+      grad.addColorStop(0.6, '#7a4e1e');
+      grad.addColorStop(1, '#c8a44a');
+      ctx.save();
+      if (cueHovered && !shot) { ctx.shadowColor = 'rgba(255,220,80,0.5)'; ctx.shadowBlur = 12; }
+      ctx.strokeStyle = grad; ctx.lineWidth = 7; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(tipX, cueBall.y); ctx.lineTo(endX, cueBall.y); ctx.stroke();
+      ctx.beginPath(); ctx.arc(tipX, cueBall.y, 4, 0, Math.PI*2); ctx.fillStyle = '#4a90d9'; ctx.fill();
+      if (cueHovered && !shot) {
+        ctx.shadowBlur = 0;
+        ctx.font = '12px Georgia, serif'; ctx.fillStyle = 'rgba(255,220,80,0.95)';
+        ctx.fillText('click to shoot!', endX + 4, cueBall.y - 14);
+      }
+      ctx.restore();
+    }
+
+    function isCueHit(mx, my) {
+      const tipX = cueBall.x - R - 3;
+      const endX = tipX - cueLen;
+      return mx >= endX && mx <= tipX && Math.abs(my - cueBall.y) <= 14;
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, W, H);
+      drawTable();
+      sCenters.forEach(b => drawBall(b.x, b.y, b.color));
+      heartBalls.forEach(b => drawBall(b.x, b.y, b.color));
+
+      if (completed) {
+        drawBall(missingPos.x, missingPos.y, '#cc2244');
+      } else {
+        drawMissingSlot();
+      }
+
+      if (shootBall && !shootBall.done) {
+        const dx = missingPos.x - shootBall.x;
+        const dy = missingPos.y - shootBall.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const speed = 7;
+        if (dist < speed + 1) {
+          shootBall.x = missingPos.x; shootBall.y = missingPos.y;
+          shootBall.done = true; completed = true;
+          msg.textContent = 'I Love You!❤️';
+        } else {
+          shootBall.x += (dx/dist) * speed;
+          shootBall.y += (dy/dist) * speed;
+        }
+        drawBall(shootBall.x, shootBall.y, '#cc2244');
+        const cbx = shootBall.x - (shootBall.x - cueBall.x) * 0.15;
+        const cby = shootBall.y - (shootBall.y - cueBall.y) * 0.15;
+        drawBall(cbx, cby, '#f5f0e8');
+        const prog = 1 - dist / shootBall.startDist;
+        drawCue(Math.min(36, prog * 52));
+      } else if (!completed) {
+        drawBall(cueBall.x, cueBall.y, '#f5f0e8');
+        drawCue(shot ? 36 : 0);
+      } else {
+        drawBall(cueBall.x + 28, cueBall.y, '#f5f0e8');
+        drawCue(38);
+      }
+
+      requestAnimationFrame(animate);
+    }
+    animate();
+
+    canvas.addEventListener('mousemove', e => {
+      const rect = canvas.getBoundingClientRect(), sx = W / rect.width;
+      const mx = (e.clientX - rect.left) * sx, my = (e.clientY - rect.top) * sx;
+      cueHovered = isCueHit(mx, my) && !shot;
+      canvas.style.cursor = cueHovered ? 'pointer' : 'default';
+    });
+
+    canvas.addEventListener('click', e => {
+      if (shot) return;
+      const rect = canvas.getBoundingClientRect(), sx = W / rect.width;
+      const mx = (e.clientX - rect.left) * sx, my = (e.clientY - rect.top) * sx;
+      if (isCueHit(mx, my)) {
+        shot = true;
+        const startDist = Math.sqrt(Math.pow(missingPos.x - cueBall.x, 2) + Math.pow(missingPos.y - cueBall.y, 2));
+        shootBall = { x: cueBall.x + R + 3, y: cueBall.y, done: false, startDist };
+        msg.textContent = '🎱 Ball rolling...';
+      }
+    });
+  </script>
+</body>
+</html>
